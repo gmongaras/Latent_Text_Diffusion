@@ -3,6 +3,7 @@ wandb/
 .env
 *.out
 data/cache/
+data/data
 
 !.gitignore
 !models/README.md
