@@ -11,7 +11,7 @@ from typing import List
 
 def train():
     totalSteps = 250_000
-    batchSize = 60
+    batchSize = 62
     dim_encoder = 512
     dim_decoder = 1024
     num_blocks_enc = 3
@@ -23,9 +23,8 @@ def train():
     num_heads = 8
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "nocausal_KL1e-6"
+    wandb_name = "nocausal_62BS_KL1e-6_V2"
     log_steps = 10
-    p_uncond = 0.1
     lr = 1e-4
     use_lr_scheduler = False
     ema_update_freq = 100
@@ -38,12 +37,14 @@ def train():
     max_seq_len = 1024
     KL_penalty_weight = 1e-6
     use_cross_attn_decoder = False
+    causal_VAE = False
+    causal_cheat = False
 
     numSaveSteps = 10_000
-    saveDir = "models/nocausal_KL1e-6"
+    saveDir = "models_VAE/nocausal_62BS_KL1e-6_V2"
 
     loadModel = False
-    loadDir = "models/nocausal_KL1e-6"
+    loadDir = "models_VAE/nocausal_62BS_KL1e-6_V2"
     loadFile = "model_90000s.pkl"
     loadDefFile = "model_params_90000s.json"
     optimFile = "optim_90000s.pkl"
@@ -67,6 +68,8 @@ def train():
         positional_encoding=positional_encoding, 
         max_seq_len=max_seq_len,
         use_cross_attn_decoder=use_cross_attn_decoder,
+        causal_VAE=causal_VAE,
+        causal_cheat=causal_cheat,
         device=device, 
     )
     
@@ -87,7 +90,6 @@ def train():
         use_lr_scheduler=use_lr_scheduler,
         saveDir=saveDir,
         numSaveSteps=numSaveSteps,
-        p_uncond=p_uncond,
         KL_penalty_weight=KL_penalty_weight,
         optimFile=None if loadModel==False or optimFile==None else loadDir+os.sep+optimFile,
         schedulerFile=None if loadModel==False or schedulerFile==None else loadDir+os.sep+schedulerFile,

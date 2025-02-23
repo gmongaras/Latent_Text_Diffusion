@@ -173,17 +173,18 @@ class Transformer_Block_Encoder_V2Conv(nn.Module):
 
 
 class Transformer_Block_Decoder(nn.Module):
-    def __init__(self, dim, cond_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", positional_encoding="rotary", use_cross_attn=True, layer_idx=None):
+    def __init__(self, dim, cond_dim, total_downscale_factor, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", positional_encoding="rotary", use_cross_attn=True, causal_VAE=False, causal_cheat=False, layer_idx=None):
         super().__init__()
 
         self.use_cross_attn = use_cross_attn
+        self.causal_cheat = causal_cheat
         
         # MLP and attention blocks
         self.MLP = MLP(dim, hidden_scale)
         # self.MLP = SwiGLU(dim, int(dim*hidden_scale), dim)
-        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=False, positional_encoding=positional_encoding, layer_idx=layer_idx)
+        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal_VAE, causal_cheat=causal_cheat, total_downscale_factor=total_downscale_factor, positional_encoding=positional_encoding, layer_idx=layer_idx)
         if use_cross_attn:
-            self.cross_attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=False, positional_encoding=positional_encoding, layer_idx=layer_idx, project_qkv=False)
+            self.cross_attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=False, causal_cheat=False, positional_encoding=positional_encoding, layer_idx=layer_idx, project_qkv=False)
         
         # Cross attention qkv projection
         if use_cross_attn:

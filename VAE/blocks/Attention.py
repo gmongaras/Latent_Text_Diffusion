@@ -7,13 +7,15 @@ from lightning_attn.ops import lightning_attn_func
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, emb_dim=None, positional_encoding="absolute", layer_idx=None, project_qkv=True):
+    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, causal_cheat=False, total_downscale_factor=None, emb_dim=None, positional_encoding="absolute", layer_idx=None, project_qkv=True):
         super().__init__()
 
         self.layer_idx = layer_idx
         self.positional_encoding = positional_encoding
         self.project_qkv = project_qkv
         self.causal = causal
+        self.causal_cheat = causal_cheat
+        self.total_downscale_factor = total_downscale_factor
 
         # The dimension must be divisible by the number of heads
         assert dim % num_heads == 0, "The dimension must be divisible by the number of heads"
@@ -114,6 +116,10 @@ class Attention(nn.Module):
             if self.causal:
                 with torch.no_grad():
                     mask = mask & torch.tril(torch.ones(N, self.num_heads, S, T, requires_grad=False, dtype=torch.bool, device=x.device))
+                    # Causal cheat unmasks the first total_downscale_factor tokens so it's bidirectional for these tokens
+                    if self.causal_cheat:
+                        assert False
+                        mask[:, :, :, :self.total_downscale_factor] = True
 
             # Flash attention
             # attn = flash_attn_func(queries, keys, values, causal=self.causal)
@@ -139,21 +145,60 @@ class Attention(nn.Module):
             
         # Cosine attention
         elif self.attn_type == "cosine":
-            # We need to normalize the values
-            values = values / (mask.sum(-1, keepdim=True)**self.norm_const.sigmoid().to(values.device))
-
-            # Mask out the queries, keys, and values
-            # queries = queries * mask.mT
-            keys = keys * mask.mT
-            values = values * mask.mT
-
             # Causual attention can use lightning attention
             if self.causal:
-                with torch.no_grad():
-                    mask = mask & torch.tril(torch.ones(N, self.num_heads, S, T, requires_grad=False, dtype=torch.bool, device=x.device))
-                attn = ((queries @ keys.mT) * mask) @ values
-                # attn_ = lightning_attn_func(queries, keys, values)
+                # Normal attention
+                if not self.causal_cheat:
+                    # Mask out the queries, keys, and values
+                    # queries = queries * mask.mT
+                    keys = keys * mask.mT
+                    values = values * mask.mT
+
+                    # # We need to normalize the values
+                    # values = values / ((mask.sum(-1, keepdim=True))**self.norm_const.sigmoid().to(values.device))
+
+                    # Add causal mask
+                    with torch.no_grad():
+                        mask = mask & torch.tril(torch.ones(N, self.num_heads, S, T, requires_grad=False, dtype=torch.bool, device=x.device))
+
+                    # We need to normalize the values
+                    values = values / (mask.sum(-1, keepdim=True)**self.norm_const.sigmoid().to(values.device))
+
+                    # Masked attention
+                    attn = ((queries @ keys.mT) * mask) @ values
+                    # attn_ = lightning_attn_func(queries, keys, values)
+                # Causal cheat
+                else:
+                    assert False
+                    # Split into bidirectional and causal queries
+
+                    # We need to normalize the values
+                    values = values / (mask.sum(-1, keepdim=True)**self.norm_const.sigmoid().to(values.device))
+
+                    # Mask out the queries, keys, and values
+                    # queries = queries * mask.mT
+                    keys = keys * mask.mT
+                    values = values * mask.mT
+
+                    # Bidirectional attention only on the first total_downsample_factor tokens
+                    attn_bi = queries[:, :, :self.total_downscale_factor] @ (keys[:, :, :self.total_downscale_factor].mT @ values[:, :, :self.total_downscale_factor])
+
+                    # Mask is (S-total_downsample_factor, S)
+                    with torch.no_grad():
+                        mask = mask & torch.tril(torch.ones(N, self.num_heads, S, T, requires_grad=False, dtype=torch.bool, device=x.device))
+                        # Causal cheat unmasks the first total_downscale_factor tokens so it's bidirectional for these tokens
+                        if self.causal_cheat:
+                            mask[:, :, :, :self.total_downscale_factor] = True
+                    attn = ((queries @ keys.mT) * mask) @ values
             else:
+                # Mask out the queries, keys, and values
+                # queries = queries * mask.mT
+                keys = keys * mask.mT
+                values = values * mask.mT
+
+                # We need to normalize the values
+                values = values / (mask.sum(-1, keepdim=True)**self.norm_const.sigmoid().to(values.device))
+                
                 attn = queries @ (keys.mT @ values)
 
 

@@ -10,6 +10,8 @@ data/data
 !results/*.gif
 !results/*.png
 
+data/Amazon_Reviews
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

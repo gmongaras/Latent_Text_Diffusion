@@ -7,8 +7,7 @@ import os
 import wandb
 from tqdm import tqdm
 import copy
-import os
-os.environ["HF_HOME"] = "data/cache"
+import datasets
 
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
@@ -18,11 +17,12 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataloader import DataLoader
 
-import datasets
-
-from helpers.multi_gpu_helpers import is_main_process
-
-from cut_cross_entropy import linear_cross_entropy
+try:
+    from helpers.multi_gpu_helpers import is_main_process
+    from helpers.TimeSampler import TimeSampler
+except ModuleNotFoundError:
+    from .helpers.multi_gpu_helpers import is_main_process
+    from .helpers.TimeSampler import TimeSampler
 
 
 cpu = torch.device('cpu')
@@ -124,7 +124,7 @@ class model_trainer():
             device, 
             saveDir, 
             numSaveSteps, 
-            KL_penalty_weight=1e-6,
+            p_uncond=None, 
             optimFile=None, 
             schedulerFile=None, 
             scalerFile=None, 
@@ -141,7 +141,7 @@ class model_trainer():
         self.use_lr_scheduler = use_lr_scheduler
         self.saveDir = saveDir
         self.numSaveSteps = numSaveSteps
-        self.KL_penalty_weight = KL_penalty_weight
+        self.p_uncond = p_uncond
         self.use_amp = use_amp
         self.wandb_name = wandb_name
         self.log_steps = log_steps
@@ -204,45 +204,47 @@ class model_trainer():
         self.wandb_id = self.model.wandb_id if dev == "cpu" else self.model.module.wandb_id
         self.start_step = self.model.start_step if dev == "cpu" else self.model.module.start_step
 
+        # Used to sample timesteps
+        self.time_sampler = TimeSampler(weighted=True)
+
         # Total params of the model
         total_params = sum(p.numel() for p in self.model.parameters()) / 1e6
         print(f"Number of parameters in the model: {total_params:.2f}M")
 
-        # Is the model causal?
-        self.causal = self.model.module.causal_VAE if dev != "cpu" else self.model.causal_VAE
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     # Trains the model
-    def train(self, dataset):
+    def train(self):
+
+        # Was class information given?
+        if self.dev == "cpu":
+            if self.model.c_emb is not None:
+                useCls = True
+
+                # Class assertion
+                assert self.p_uncond != None, "p_uncond cannot be None when using class information"
+            else:
+                useCls = False
+        else:
+            if self.model.module.c_emb is not None:
+                useCls = True
+
+                # Class assertion
+                assert self.p_uncond != None, "p_uncond cannot be None when using class information"
+            else:
+                useCls = False
+
         # Put the model is train mode
         self.model.train()
 
         # Number of steps taken so far
         num_steps = self.start_step
-        
-
-
-
-
-
 
         # Load in datasets
         os.environ["HF_HOME"] = "data/cache"
         os.environ["HF_DATASETS_CACHE"] = "data/cache"
-        self.dataset = datasets.load_dataset(dataset, num_proc=16, split="train", cache_dir="data/cache")
+        dataset = "gmongaras/Amazon-Reviews-2023"
+        self.dataset = datasets.load_dataset(dataset, num_proc=8, split="train", cache_dir="data/cache")
         
         # # Tokenize the dummy dataset
         # if dataset == "gmongaras/dummy_text_dataset":
@@ -255,61 +257,34 @@ class model_trainer():
         #     )
         
         def collate_fn(batch):
-            batch = self.model.module.tokenizer([i["text"] for i in batch], 
+            # Class and text
+            cond = [int(i["rating"]-1) for i in batch]
+            batch = self.model.module.VAE.tokenizer([i["text"] for i in batch], 
                                                return_tensors="pt", 
                                                padding=True, #"max_length",
                                                truncation=True, 
-                                               max_length=self.model.module.tokenizer.model_max_length + (1 if self.causal else 0))
+                                               max_length=self.model.module.model_max_length)
             # Remove short sequences
-            # batch["input_ids"] = batch["input_ids"]#[batch["attention_mask"].sum(-1) > 4 + self.model.module.total_downscale_factor]
-            # batch["attention_mask"] = batch["attention_mask"]#[batch["attention_mask"].sum(-1) > 4 + self.model.module.total_downscale_factor]
-            batch["input_ids"] = batch["input_ids"][batch["attention_mask"].sum(-1) > 4 + self.model.module.total_downscale_factor]
-            batch["attention_mask"] = batch["attention_mask"][batch["attention_mask"].sum(-1) > 4 + self.model.module.total_downscale_factor]
-            
-            # Causal shifts the input_ids and attention_mask by one
-            if self.causal:
-                # Labels are the input_ids shifted by one
-                batch["labels"] = batch["input_ids"][:, 1:].to(batch["input_ids"].device)
-                # Cutoff input_ids and attention_mask by 1
-                batch["input_ids"] = batch["input_ids"][:, :-1]
-                batch["attention_mask"] = batch["attention_mask"][:, :-1].bool()
-                # Make sure the last label is the end of sequence token
-            # Bidirectional uses the raw input_ids and attention_mask
-            else:
-                batch["attention_mask"] = batch["attention_mask"].bool()
-                # Labels are the input_ids
-                batch["labels"] = batch["input_ids"].to(batch["input_ids"].device)
-
-            # Mask labels with -100 where the attention mask is 0.
-            batch["labels"] = torch.where(batch["attention_mask"], batch["labels"], torch.tensor(-100).to(batch["labels"].device))
-
+            batch["input_ids"] = batch["input_ids"][batch["attention_mask"].sum(-1) > 4 + self.model.module.VAE.total_downscale_factor]
+            batch["rating"] = torch.tensor(cond).long().clamp(0, 4)[batch["attention_mask"].sum(-1) > 4 + self.model.module.VAE.total_downscale_factor].to(batch["input_ids"].device)
+            batch["attention_mask"] = batch["attention_mask"][batch["attention_mask"].sum(-1) > 4 + self.model.module.VAE.total_downscale_factor].bool()
+            # batch["attention_mask"] = batch["attention_mask"].bool()
+            # Labels are the input_ids
+            batch["labels"] = batch["input_ids"].to(batch["input_ids"].device)
+            # Add condition
+            # batch["rating"] = torch.tensor(cond).long().to(batch["input_ids"].device)
             return batch
+        data_loader = DataLoader(self.dataset, batch_size=self.batchSize,
+            pin_memory=True,
+            drop_last=False, 
+            # sampler=DistributedSampler(dataset, shuffle=True, num_replicas=torch.distributed.get_world_size(), rank=torch.distributed.get_rank()),
+            sampler=torch.utils.data.RandomSampler(self.dataset, replacement=True, num_samples=(self.totalSteps-num_steps)*self.batchSize),
 
-        if self.dev == "cpu":
-            data_loader = DataLoader(self.dataset, batch_size=self.batchSize,
-                pin_memory=True,
-                drop_last=False, 
-                shuffle=True,
-
-                num_workers=5,
-                prefetch_factor=5,
-                persistent_workers=True,
-                collate_fn=collate_fn,
-            )
-        else:
-            data_loader = DataLoader(self.dataset, batch_size=self.batchSize,
-                pin_memory=True,
-                drop_last=False, 
-                # sampler=DistributedSampler(dataset, shuffle=True, num_replicas=torch.distributed.get_world_size(), rank=torch.distributed.get_rank()),
-                sampler=torch.utils.data.RandomSampler(self.dataset, replacement=True, num_samples=(self.totalSteps-num_steps)*self.batchSize),
-
-                num_workers=5,
-                prefetch_factor=5,
-                persistent_workers=True,
-                collate_fn=collate_fn,
-            )
-
-        
+            num_workers=5,
+            prefetch_factor=5,
+            persistent_workers=True,
+            collate_fn=collate_fn,
+        )
 
         # Losses over steps
         self.losses_comb = np.array([])
@@ -319,13 +294,11 @@ class model_trainer():
         losses_comb_s = torch.tensor(0.0, requires_grad=False)
 
         batch_loss = 0
-        batch_recon_loss = 0
-        batch_KL_loss = 0
 
         # Initialize wandb run
         if is_main_process():
             wandb.init(
-                project="Latent_Text_Diffusion",
+                project="Latent_Text_Diffusion_DM",
                 name=self.wandb_name,
                 notes=None, # May add notes later
                 
@@ -343,34 +316,89 @@ class model_trainer():
 
         # Sync all processes
         dist.barrier()
-
-        loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
         
         # Iterate over the desiered number of steps
         for step, data in enumerate(tqdm(data_loader, initial=num_steps, total=self.totalSteps)):
-            # Get the batch
-            input_ids = data["input_ids"].to(self.device)
-            attention_mask = data["attention_mask"].to(self.device)
-            labels = data["labels"].to(self.device)
-
-            if input_ids.shape[0] == 0:
-                print("Batch too small.. continuing")
+            if data["input_ids"].shape[0] == 0:
                 continue
+
+            step = step + self.start_step
+            batch_x_0 = data["input_ids"].to(self.device)
+            attention_mask = data["attention_mask"].to(self.device)
+            batch_class = data["rating"].to(batch_x_0.device).long()
+
+            # Encode batch using VAE - downsample by a factor of 8
+            with torch.no_grad():
+                vae_output, vae_mask = self.model.module.VAE.encode(x_t=batch_x_0, mask=attention_mask)
+
+                # # Normalize the latent representation
+                # if self.model.module.VAE.config.shift_factor is not None:
+                #     batch_x_0 = batch_x_0 + self.model.module.VAE.conifg.shift_factor
+                # batch_x_0 = batch_x_0 * self.model.module.VAE.config.scaling_factor
+
+                # # Decode the sample
+                # if self.dev == "cpu":
+                #     batch_x_0_ = self.model.VAE.decode(batch_x_0).sample.clamp(-1, 1)
+                # else:
+                #     batch_x_0_ = self.model.module.VAE.decode(batch_x_0).sample.clamp(-1, 1)
+
+                # # Save image
+                # torchvision.utils.save_image((batch_x_0_[0]+1)/2, f"sample1.png")
+                # torchvision.utils.save_image((batch_x_0_[1]+1)/2, f"sample2.png")
+                # torchvision.utils.save_image((batch_x_0_[2]+1)/2, f"sample3.png")
             
             # Increate the number of steps taken
             num_steps += 1
+            
+            # # Get a random value between 0 and 1
+            # t_vals = torch.rand(batch_x_0.shape[0], device=batch_x_0.device)
+            # Weighted timestep, still betwee 0 and 1
+            t_vals = self.time_sampler(vae_output.shape[0])
 
+
+            # Probability of class embeddings being the null embedding
+            if self.p_uncond != None:
+                probs = torch.rand(vae_output.shape[0])
+                nullCls = torch.where(probs < self.p_uncond, 1, 0).to(torch.bool).to(self.device)
+            else:
+                nullCls = None
+            
+
+            # Noise the batch to time t
+            with torch.no_grad():
+                if self.dev == "cpu":
+                    batch_x_t, epsilon_t = self.model.noise_batch(vae_output, t_vals)
+                else:
+                    batch_x_t, epsilon_t = self.model.module.noise_batch(vae_output, t_vals)
+            
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
-                # Logit prediction
-                outputs, KL_loss = self.model(input_ids, mask=attention_mask, get_KL_loss=True, unembed=True)
+                # Send the noised data through the model to get the predicted noise
+                v_pred = self.model(batch_x_t.detach(), t_vals, batch_class if useCls else None, nullCls, mask=vae_mask)
 
-                # Mask labels with -100 where the attention mask is 0.
-                # labels = torch.where(attention_mask, labels, torch.tensor(-100).to(labels.device))
+                # The label is the velocity: 
+                # v_t = alpha_t' * x + sigma_t' * epsilon_t
+                # v_t = (1-t)' * x + (t)' * epsilon_t
+                # v_t = -x + epsilon_t
+                # v_t = epsilon_t - x
+                # labels = batch_x_0.to(epsilon_t.device) - epsilon_t
+                labels = epsilon_t - vae_output.to(epsilon_t.device)
+
+                # MSE between noise and predicted noise
+                loss = (nn.MSELoss(reduction="none")(v_pred, labels.detach()) * vae_mask[:, :, None]).flatten(1, -1)
                 
-                # Loss
-                # loss_recon = linear_cross_entropy(outputs.to(torch.bfloat16).view(-1, self.model.module.defaults["dim_decoder"]), self.model.module.unembedding.weight.to(torch.bfloat16), labels.view(-1).to(outputs.device))
-                loss_recon = loss_fct(outputs.view(-1, self.model.module.vocab_size), labels.view(-1).to(outputs.device))
-                loss = loss_recon + (self.KL_penalty_weight*KL_loss)
+                weigh_loss = False
+
+                if weigh_loss:
+                    def lognorm(t, m=0, s=1):
+                        return (1/(s*np.sqrt(2*np.pi)))*(1/(t*(1-t)))*torch.exp(-(((torch.log(t/(1-t))-m)**2)/(2*(s**2))))
+
+                    # Weight for rectified flows
+                    weight = (t_vals / (1-t_vals)) * lognorm(t_vals, m=0.0, s=1.0)
+                    
+                    # Weighted loss
+                    loss = (loss * weight[:, None].to(loss.device).detach()).mean()
+                else:
+                    loss = loss.mean()
 
             # Scale the loss to be consistent with the batch size. If the loss
             # isn't scaled, then the loss will be treated as an independent
@@ -388,19 +416,17 @@ class model_trainer():
             # Save the loss values
             losses_comb_s += loss.cpu().detach()
             batch_loss += loss.cpu().detach().item()
-            batch_recon_loss += loss_recon.cpu().detach().item()
-            batch_KL_loss += KL_loss.cpu().detach().item()
 
             # If the number of steps taken is a multiple of the number
             # of desired steps, update the models
             if num_steps%self.numSteps == 0:
                 # Unscale gradients
                 if self.use_amp:
-                    self.grad_scaler.unscale_(self.optim, )
+                    self.grad_scaler.unscale_(self.optim)
 
-                # Clip gradients
-                if self.use_amp:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                # # Clip gradients
+                # if self.use_amp:
+                #     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 
                 # Update the model using all losses over the steps
                 if self.use_amp:
@@ -424,22 +450,15 @@ class model_trainer():
                 # Log wandb
                 if num_steps % self.log_steps == 0:
                     batch_loss = batch_loss/self.log_steps
-                    batch_recon_loss = batch_recon_loss/self.log_steps
-                    batch_KL_loss = batch_KL_loss/self.log_steps
                     
                     if is_main_process():
                         wandb.log({
                             "loss": batch_loss,
-                            "perplexity": torch.exp(torch.tensor(batch_loss)).item(),
-                            "recon loss": batch_recon_loss,
-                            "KL loss": batch_KL_loss,
                             "lr": self.optim.param_groups[0]['lr'],
                         },
                         step=num_steps)
                     
                     batch_loss = 0
-                    batch_recon_loss = 0
-                    batch_KL_loss = 0
 
                 # Save the loss values
                 self.losses_comb = np.append(self.losses_comb, losses_comb_s.item())

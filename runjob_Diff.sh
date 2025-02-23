@@ -1,14 +1,13 @@
 #!/bin/bash
 
 #SBATCH -A eclarson_protein_diffusion_0001
-#SBATCH --job-name=UwU_Diffusion_^w^
+#SBATCH --job-name=^w^_Diffuwusion_OwO
 #SBATCH -p batch
 ###SBATCH --exclusive
-#SBATCH -o runjob.out
+#SBATCH -o runjob_Diff.out
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:3
 #SBATCH --mem=500G
-
 
 # Specify node to run on
 ###SBATCH --nodelist=bcm-dgxa100-0003
@@ -17,7 +16,10 @@
 # Number of nodes
 nnodes=1
 # Number of tasks per node
-nproc_per_node=2
+nproc_per_node=3
+
+
+export CUDA_LAUNCH_BLOCKING=1
 
 
 nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
@@ -34,5 +36,5 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 srun /home/gmongaras/miniconda3/bin/torchru
 --nproc_per_node $nproc_per_node \
 --rdzv_id $RANDOM \
 --rdzv_backend c10d \
---rdzv_endpoint $head_node_ip:29500 \
+--rdzv_endpoint $head_node_ip:29501 \
 src/train.py
