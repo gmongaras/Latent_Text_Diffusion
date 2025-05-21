@@ -10,20 +10,21 @@ from typing import List
 
 
 def train():
-    totalSteps = 250_000
-    batchSize = 62
+    totalSteps = 200_000
+    batchSize = 60
     dim_encoder = 512
-    dim_decoder = 1024
+    dim_decoder = 512
+    latent_dim = 128
     num_blocks_enc = 3
     num_blocks_dec = 7
     encoder_seq_downscale_factor = 2
-    encoder_out_dims = [512, 768, 1024]
+    encoder_out_dims = [512, 256, 128]
     encoder_num_inner_blocks = 2
     hidden_scale = 4.0
     num_heads = 8
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "nocausal_62BS_KL1e-6_V2"
+    wandb_name = "causal_60BS_KL1e-6_128_latent_space"
     log_steps = 10
     lr = 1e-4
     use_lr_scheduler = False
@@ -37,14 +38,14 @@ def train():
     max_seq_len = 1024
     KL_penalty_weight = 1e-6
     use_cross_attn_decoder = False
-    causal_VAE = False
+    causal_VAE = True
     causal_cheat = False
 
     numSaveSteps = 10_000
-    saveDir = "models_VAE/nocausal_62BS_KL1e-6_V2"
+    saveDir = "models_VAE/causal_60BS_KL1e-6_128_latent_space"
 
     loadModel = False
-    loadDir = "models_VAE/nocausal_62BS_KL1e-6_V2"
+    loadDir = "models_VAE/causal_60BS_KL1e-6_128_latent_space"
     loadFile = "model_90000s.pkl"
     loadDefFile = "model_params_90000s.json"
     optimFile = "optim_90000s.pkl"
@@ -57,6 +58,7 @@ def train():
     model = Autoencoder(
         dim_encoder=dim_encoder,
         dim_decoder=dim_decoder, 
+        latent_dim=latent_dim,
         hidden_scale=hidden_scale, 
         num_heads=num_heads, 
         attn_type=attn_type, 

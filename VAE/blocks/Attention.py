@@ -38,8 +38,8 @@ class Attention(nn.Module):
             self.scale = self.head_dim ** -0.5
 
             # Softmax attention also needs q k norms
-            self.q_norm = nn.RMSNorm(dim, dim)
-            self.k_norm = nn.RMSNorm(dim, dim)
+            self.q_norm = nn.RMSNorm(dim)
+            self.k_norm = nn.RMSNorm(dim)
 
         elif attn_type == "cosine":
             self.norm_const = nn.Parameter(0.5*torch.ones(1, num_heads, 1, 1, dtype=self.out_proj.weight.dtype).to(self.out_proj.weight.device))

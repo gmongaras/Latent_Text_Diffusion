@@ -3,10 +3,10 @@
 #SBATCH -A eclarson_protein_diffusion_0001
 #SBATCH --job-name=^w^_Diffuwusion_OwO
 #SBATCH -p batch
-###SBATCH --exclusive
+#SBATCH --exclusive
 #SBATCH -o runjob_Diff.out
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:3
+#SBATCH --gres=gpu:8
 #SBATCH --mem=500G
 
 # Specify node to run on
@@ -16,10 +16,11 @@
 # Number of nodes
 nnodes=1
 # Number of tasks per node
-nproc_per_node=3
+nproc_per_node=8
 
 
 export CUDA_LAUNCH_BLOCKING=1
+export HF_HOME="data/cache"
 
 
 nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )

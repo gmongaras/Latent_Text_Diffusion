@@ -14,15 +14,15 @@ def train():
     batchSize = 512
     input_dim = 1024
     num_classes = 5
-    num_blocks = 17
+    num_blocks = 21
     model_max_length = 256
     dim = int(64*num_blocks)
     c_dim = 1024
     hidden_scale = 4.0
     num_heads = num_blocks
-    attn_type = "softmax"
+    attn_type = "flash"
     device = "gpu"
-    wandb_name = "attempt1"
+    wandb_name = "attempt7_causal_epspred"
     log_steps = 10
     p_uncond = 0.1
     lr = 1e-4
@@ -31,28 +31,28 @@ def train():
     ema_decay = 0.99
     warmup_steps = 1000
     positional_encoding = "RoPE" # "absolute" or "RoPE"
+    output_type = "eps" # "velocity", "x", or "eps"
 
     numSaveSteps = 10_000
-    saveDir = "models/attempt1"
+    saveDir = "models_Diff/attempt7_causal_epspred"
 
     loadModel = False
-    loadDir = "models/attempt1"
-    loadFile = "model_220000s.pkl"
-    loadDefFile = "model_params_220000s.json"
-    optimFile = "optim_220000s.pkl"
-    schedulerFile = "scheduler_220000s.pkl"
-    scalerFile = "scaler_220000s.pkl"
+    loadDir = "models_Diff/attempt7_causal_epspred"
+    loadFile = "model_150000s.pkl"
+    loadDefFile = "model_params_150000s.json"
+    optimFile = "optim_150000s.pkl"
+    schedulerFile = "scheduler_150000s.pkl"
+    scalerFile = "scaler_150000s.pkl"
 
     # VAE_loadDir = "models/causal_45BS_KL1e-6"
-    VAE_loadDir = "models/causal_45BS_KL1e-6_nosmallseq_maskfix"
-    VAE_loadFile = "model_170000s.pkl"
-    VAE_loadDefFile = "model_params_170000s.json"
+    VAE_loadDir = "models_VAE/causal_60BS_KL1e-6_128_latent_space"
+    VAE_loadFile = "model_150000s.pkl"
+    VAE_loadDefFile = "model_params_150000s.json"
     
     
     
     ### Model Creation
     model = diff_model(
-        input_dim=input_dim,
         num_classes=num_classes,
         dim=dim,
         c_dim=c_dim,
@@ -62,6 +62,7 @@ def train():
         num_blocks=num_blocks,
         model_max_length=model_max_length,
         positional_encoding=positional_encoding,
+        output_type=output_type,
         VAE_loadDir=VAE_loadDir,
         VAE_loadFile=VAE_loadFile,
         VAE_loadDefFile=VAE_loadDefFile,

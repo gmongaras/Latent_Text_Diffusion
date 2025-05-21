@@ -13,12 +13,11 @@ import pickle
 
 
 def infer():
-    loadDir = "models/causal_45BS_KL1e-6_nosmallseq_maskfix"
-    # loadDir = "models/causal_45BS_KL1e-6_nosmallseq"
-    # loadDir = "models/causal_45BS_KL1e-6"
-    # loadDir = "models/nocausal_60BS_KL1e-6"
-    # loadFile = "model_140000s.pkl"
-    # loadDefFile = "model_params_140000s.json"
+    # loadDir = "models_VAE/nocausal_60BS_KL1e-6_V2"
+    # loadFile = "model_180000s.pkl"
+    # loadDefFile = "model_params_180000s.json"
+
+    loadDir = "models_VAE/causal_60BS_KL1e-6_128_latent_space"
     loadFile = "model_150000s.pkl"
     loadDefFile = "model_params_150000s.json"
 
@@ -32,6 +31,7 @@ def infer():
     # Create a dummy model
     dim_encoder = 256
     dim_decoder = 256
+    latent_dim = 128
     hidden_scale = 2.0
     num_heads = 8
     attn_type = "cosine"
@@ -60,6 +60,7 @@ def infer():
     model = Autoencoder(
         dim_encoder=dim_encoder,
         dim_decoder=dim_decoder, 
+        latent_dim=latent_dim,
         hidden_scale=hidden_scale, 
         num_heads=num_heads, 
         attn_type=attn_type, 

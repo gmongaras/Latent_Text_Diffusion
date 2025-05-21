@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.distributed
 import torchvision
 import numpy as np
 import matplotlib.pyplot as plt
@@ -237,6 +238,10 @@ class model_trainer():
         # Put the model is train mode
         self.model.train()
 
+        # Get the output type
+        output_type = self.model.module.output_type
+        assert output_type in ["velocity", "x", "eps"]
+
         # Number of steps taken so far
         num_steps = self.start_step
 
@@ -329,7 +334,39 @@ class model_trainer():
 
             # Encode batch using VAE - downsample by a factor of 8
             with torch.no_grad():
+                # Get VAE output
                 vae_output, vae_mask = self.model.module.VAE.encode(x_t=batch_x_0, mask=attention_mask)
+
+                # Get the shift and scale parameters
+                shift = self.model.module.VAE_shift
+                scale = self.model.module.VAE_scale
+
+                # If the parameters are nan, we need to change them
+                if torch.isnan(shift).item():
+                    # The mean / shift value is the mean of the batch
+                    shift = vae_output.float().mean()
+
+                    # Do an all-to-all to get the batch-wise mean
+                    torch.distributed.all_reduce(shift, op=torch.distributed.ReduceOp.AVG)
+
+                    # The variance (std) is the deviation from the mean
+                    scale = ((vae_output - shift)**2).float().mean()**0.5
+
+                    # Do an all-to-all between gpus
+                    torch.distributed.all_reduce(scale, op=torch.distributed.ReduceOp.AVG)
+
+                    # Update the shift and scale in the model
+                    self.model.module.VAE_shift.data = shift.to(self.model.module.VAE_shift.dtype)
+                    self.model.module.VAE_scale.data = scale.to(self.model.module.VAE_scale.dtype)
+                    self.ema_model_cpu.VAE_shift.data = shift.to(self.model.module.VAE_shift.dtype)
+                    self.ema_model_cpu.VAE_scale.data = scale.to(self.model.module.VAE_scale.dtype)
+
+                    shift = self.model.module.VAE_shift
+                    scale = self.model.module.VAE_scale
+
+
+                # Normalize the output such that it has zero mean and unit variance
+                vae_output = vae_output / scale
 
                 # # Normalize the latent representation
                 # if self.model.module.VAE.config.shift_factor is not None:
@@ -373,22 +410,29 @@ class model_trainer():
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals, batch_class if useCls else None, nullCls, mask=vae_mask)
+                pred = self.model(batch_x_t.detach().requires_grad_(), t_vals, batch_class if useCls else None, nullCls, mask=vae_mask)
 
-                # The label is the velocity: 
-                # v_t = alpha_t' * x + sigma_t' * epsilon_t
-                # v_t = (1-t)' * x + (t)' * epsilon_t
-                # v_t = -x + epsilon_t
-                # v_t = epsilon_t - x
-                # labels = batch_x_0.to(epsilon_t.device) - epsilon_t
-                labels = epsilon_t - vae_output.to(epsilon_t.device)
+                # Get the label based on what we want the model to learn to predict
+                if output_type == "velocity":
+                    # The label is the velocity: 
+                    # v_t = alpha_t' * x + sigma_t' * epsilon_t
+                    # v_t = (1-t)' * x + (t)' * epsilon_t
+                    # v_t = -x + epsilon_t
+                    # v_t = epsilon_t - x
+                    # labels = batch_x_0.to(epsilon_t.device) - epsilon_t
+                    labels = epsilon_t - vae_output.to(epsilon_t.device)
+                elif output_type == "x":
+                    labels = vae_output.to(epsilon_t.device)
+                elif output_type == "eps":
+                    labels = epsilon_t.to(epsilon_t.device)
 
                 # MSE between noise and predicted noise
-                loss = (nn.MSELoss(reduction="none")(v_pred, labels.detach()) * vae_mask[:, :, None]).flatten(1, -1)
+                loss = (nn.MSELoss(reduction="none")(pred, labels.detach()) * vae_mask[:, :, None])
                 
                 weigh_loss = False
 
                 if weigh_loss:
+                    assert False
                     def lognorm(t, m=0, s=1):
                         return (1/(s*np.sqrt(2*np.pi)))*(1/(t*(1-t)))*torch.exp(-(((torch.log(t/(1-t))-m)**2)/(2*(s**2))))
 
@@ -396,9 +440,12 @@ class model_trainer():
                     weight = (t_vals / (1-t_vals)) * lognorm(t_vals, m=0.0, s=1.0)
                     
                     # Weighted loss
-                    loss = (loss * weight[:, None].to(loss.device).detach()).mean()
+                    loss = (loss * weight[:, None].to(loss.device).detach())
                 else:
-                    loss = loss.mean()
+                    loss = loss
+
+                # Mean loss
+                loss = (loss.sum(1) / vae_mask.sum(-1)[:, None]).mean()
 
             # Scale the loss to be consistent with the batch size. If the loss
             # isn't scaled, then the loss will be treated as an independent

@@ -1,4 +1,4 @@
-models/
+./models/
 wandb/
 .env
 *.out
@@ -11,6 +11,9 @@ data/data
 !results/*.png
 
 data/Amazon_Reviews
+
+cache/
+models/
 
 
 # Byte-compiled / optimized / DLL files

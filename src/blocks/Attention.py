@@ -25,12 +25,12 @@ class Attention(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = (dim if emb_dim == None else emb_dim) // num_heads
-        if attn_type == "softmax" or attn_type == "softmax_DK" or attn_type == "softmax_DV":
+        if attn_type == "softmax" or attn_type == "softmax_DK" or attn_type == "softmax_DV" or attn_type == "flash":
             self.scale = self.head_dim ** -0.5
 
             # Softmax attention also needs q k norms
-            self.q_norm = nn.RMSNorm(dim, dim)
-            self.k_norm = nn.RMSNorm(dim, dim)
+            self.q_norm = nn.RMSNorm(self.head_dim)
+            self.k_norm = nn.RMSNorm(self.head_dim)
 
         elif attn_type == "cosine":
             self.norm_const = nn.Parameter(0.5*torch.ones(1, num_heads, 1, 1, dtype=self.query_proj.weight.dtype).to(self.query_proj.weight.device))
@@ -67,10 +67,10 @@ class Attention(nn.Module):
 
         # RMSNorm if softmax
         # Project the queries, keys, and values (N, C, d) --> (N, H, C, d//H)
-        if self.attn_type == "softmax" or self.attn_type == "softmax_DK" or self.attn_type == "softmax_DV":
+        if self.attn_type == "softmax" or self.attn_type == "softmax_DK" or self.attn_type == "softmax_DV" or self.attn_type == "flash":
             # Add RMS norm if softmax
-            queries = self.q_norm(self.query_proj(x)).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-            keys = self.k_norm(self.key_proj(x)).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            queries = self.q_norm(self.query_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3))
+            keys = self.k_norm(self.key_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3))
             values = self.value_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         else:
             queries = self.query_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
@@ -106,17 +106,24 @@ class Attention(nn.Module):
                 assert False, "Causal softmax attention not implemented"
                 mask = torch.tril(torch.ones(N, self.num_heads, C, C, requires_grad=False)).bool().to(x.device)
                     
-            # Flash attention
-            # attn = flash_attn_func(queries.to(torch.bfloat16), keys.to(torch.bfloat16), values.to(torch.bfloat16), causal=self.causal).to(queries.dtype)
-
             attn = (queries @ keys.mT) * self.scale
-            
             if self.causal or mask is not None:
                 attn = attn.masked_fill(~mask.mT, float('-inf')).softmax(dim=-1)
             else:
                 attn = attn.softmax(dim=-1)
 
             attn = attn @ values
+
+
+        # Softmax attention
+        elif self.attn_type == "flash":
+            # Create mask
+            if self.causal:
+                assert False, "Causal softmax attention not implemented"
+                mask = torch.tril(torch.ones(N, self.num_heads, C, C, requires_grad=False)).bool().to(x.device)
+                    
+            # Flash attention
+            attn = flash_attn_func(queries.transpose(1, 2).to(torch.bfloat16), keys.transpose(1, 2).to(torch.bfloat16), values.transpose(1, 2).to(torch.bfloat16), causal=self.causal, softmax_scale=self.scale).transpose(1, 2).to(queries.dtype)
         
 
         elif self.attn_type == "softmax_DK":

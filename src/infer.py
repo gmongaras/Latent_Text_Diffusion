@@ -33,12 +33,13 @@ import pickle
 # @click.option("--gif_fps", "gif_fps", type=int, default=10, help="FPS for the output gif.", required=False)
 
 def infer():
-    loadDir = "models/attempt1/"
-    loadFile = "model_150000s.pkl"
-    loadDefFile = "model_params_150000s.json"
+    loadDir = "models_Diff/attempt7_causal_epspred/"
+    # loadDir = "models/attempt1/"
+    loadFile = "model_10000s.pkl"
+    loadDefFile = "model_params_10000s.json"
 
     num_steps = 100
-    w = 5
+    w = 3
     class_label = 1
     sampler = "euler"
     seed = -1
@@ -52,7 +53,6 @@ def infer():
     ### Model Creation
 
     # Create a dummy model
-    input_dim = 4
     num_classes = 1000
     model_max_length = 256
     dim = 1024
@@ -62,13 +62,13 @@ def infer():
     attn_type = "cosine"
     num_blocks = 20
     positional_encoding = "absolute"
+    output_type = "eps"
     VAE_loadDir = ""
     VAE_loadFile = ""
     VAE_loadDefFile = ""
     device = "gpu"
 
     model = diff_model(
-        input_dim=input_dim,
         num_classes=num_classes,
         dim=dim,
         c_dim=c_dim,
@@ -78,6 +78,7 @@ def infer():
         num_blocks=num_blocks,
         model_max_length=model_max_length,
         positional_encoding=positional_encoding,
+        output_type=output_type,
         VAE_loadDir=VAE_loadDir,
         VAE_loadFile=VAE_loadFile,
         VAE_loadDefFile=VAE_loadDefFile,
